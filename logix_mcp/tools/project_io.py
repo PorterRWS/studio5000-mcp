@@ -13,6 +13,7 @@ Tool bodies follow the universal pattern:
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from logix_designer_sdk import LogixProject  # pyright: ignore[reportMissingImports]
@@ -30,6 +31,73 @@ from logix_mcp._xml import _fmt_table, _l5x_quick_open_summary
 
 
 _PROJECT_EXTS = {".ACD", ".L5X", ".L5K"}
+
+
+@mcp.tool()
+async def copy_project(path: str, output: str = "", force: bool = False) -> str:
+    """Copy a ``.ACD`` / ``.L5X`` / ``.L5K`` on disk without opening it in the SDK.
+
+    Use this when Studio already has the original project open (exclusive lock):
+    copy to a sibling path, then call other tools against the copy. With no
+    ``output``, writes ``{stem}_mcp{suffix}`` next to the source. Pass
+    ``force=true`` to overwrite an existing destination.
+    """
+    pf = preflight_project_path(path)
+    if pf:
+        return pf
+
+    src = _resolve(path)
+    if output and str(output).strip():
+        out = _resolve(output)
+    else:
+        out = src.with_name(f"{src.stem}_mcp{src.suffix}")
+
+    pf = preflight_output_path(str(out), _PROJECT_EXTS)
+    if pf:
+        return pf
+    if out.suffix.lower() != src.suffix.lower():
+        return (
+            "[FAIL] copy_project\n"
+            "code:    INVALID_INPUT\n"
+            "class:   ValueError\n"
+            f"message: output extension {out.suffix!r} must match source "
+            f"{src.suffix!r}\n"
+            "hint:    Keep the same project extension on the copy.\n"
+            f"context: path={src} output={out}"
+        )
+    if out.resolve() == src.resolve():
+        return (
+            "[FAIL] copy_project\n"
+            "code:    INVALID_INPUT\n"
+            "class:   ValueError\n"
+            "message: output path is the same as the source path\n"
+            "hint:    Pick a different destination path for the copy.\n"
+            f"context: path={src} output={out}"
+        )
+    if out.exists() and not force:
+        return (
+            "[FAIL] copy_project\n"
+            "code:    CONFIRM_REQUIRED\n"
+            "class:   FileExistsError\n"
+            f"message: destination already exists: {out}\n"
+            "hint:    Re-run with force=true to overwrite, or pick a new output path.\n"
+            f"context: path={src} output={out} force={force}"
+        )
+
+    async def _do() -> str:
+        # Binary file copy — does not open Logix Designer / the SDK.
+        shutil.copy2(src, out)
+        size_mb = out.stat().st_size / (1024 * 1024)
+        return (
+            f"[OK] Copied {src} -> {out}\n"
+            f"Size: {size_mb:.2f} MB\n"
+            "Note: Studio may still hold an exclusive lock on the source; "
+            "use the copy path for subsequent MCP tools."
+        )
+
+    return await _run(
+        "copy_project", _do, path=str(src), output=str(out), force=force
+    )
 
 
 @mcp.tool()
@@ -268,6 +336,7 @@ def _field(obj: object, *names: str) -> object:
 
 
 __all__ = [
+    "copy_project",
     "open_project",
     "save_project",
     "export_l5x",
