@@ -38,6 +38,7 @@ _TOOL_MODULES = (
     "logix_mcp.tools.build",
     "logix_mcp.tools.tags",
     "logix_mcp.tools.program",
+    "logix_mcp.tools.xref",
     "logix_mcp.tools.partial",
     "logix_mcp.tools.protection",
     "logix_mcp.tools.safety",

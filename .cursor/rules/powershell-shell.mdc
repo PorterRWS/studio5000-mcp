@@ -1,0 +1,21 @@
+---
+description: Use PowerShell only for all agent shell commands on this Windows repo
+alwaysApply: true
+---
+
+# PowerShell-only shell
+
+This repo is developed on Windows. Agents must use **PowerShell** for every shell command.
+Canonical details: [`AGENTS.md`](../../AGENTS.md).
+
+## Hard rules
+
+- Do **not** use `bash`, Git Bash, WSL, `sh`, or bash heredocs (`<<'EOF'`, `<<'PY'`, `$(cat <<'EOF')`).
+- Do **not** call `bash.exe` / `wsl.exe` to work around PowerShell syntax.
+- Prefer PowerShell-native constructs: here-strings (`@'...'@`, `@"..."@`), pipelines, `Get-ChildItem`, etc.
+- For multi-line Python, write a temporary `.py` file (e.g. under `$env:TEMP`) and run it with the Python 3.12 executable — do not pipe a bash heredoc into `python`.
+- Prefer resolving Python as:
+  - `py -3.12` if the launcher exists, else
+  - `"$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"` (or another discovered 3.12 path).
+- Install / run helpers: use `install.ps1` and PowerShell examples in the docs, not bash snippets.
+- Git commit messages: `git commit -m @'... '@` (PowerShell here-string), not bash HEREDOC.

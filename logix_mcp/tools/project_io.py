@@ -13,7 +13,11 @@ Tool bodies follow the universal pattern:
 """
 from __future__ import annotations
 
+import re
 import shutil
+import subprocess
+import sys
+import winreg
 from pathlib import Path
 
 from logix_designer_sdk import LogixProject  # pyright: ignore[reportMissingImports]
@@ -33,14 +37,72 @@ from logix_mcp._xml import _fmt_table, _l5x_quick_open_summary
 _PROJECT_EXTS = {".ACD", ".L5X", ".L5K"}
 
 
+def _program_copies_dir() -> Path:
+    """Folder for lock-safe working copies, inside the MCP install root."""
+    root = Path(__file__).resolve().parents[2]
+    folder = root / "ProgramCopies"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+_LOADER_FALLBACKS = (
+    r"C:\Program Files (x86)\Rockwell Software\RSLogix 5000\Common\RSLogix5000Loader.exe",
+    r"C:\Program Files\Rockwell Software\RSLogix 5000\Common\RSLogix5000Loader.exe",
+)
+
+# Drive path to RSLogix5000Loader.exe; allows spaces (e.g. "RSLogix 5000").
+_LOADER_IN_CMD = re.compile(
+    r'(?P<p>[A-Za-z]:\\[^\t"%]*?RSLogix5000Loader\.exe)',
+    re.IGNORECASE,
+)
+
+
+def _parse_loader_from_command(cmd: str) -> Path | None:
+    """Extract RSLogix5000Loader.exe from a shell ``open`` command string."""
+    m = _LOADER_IN_CMD.search(str(cmd or ""))
+    if not m:
+        return None
+    p = Path(m.group("p"))
+    return p if p.is_file() else None
+
+
+def _designer_loader_path() -> Path:
+    """Resolve RSLogix5000Loader.exe (version-aware Studio/Logix Designer launcher)."""
+    # Prefer ACD/L5X associations — some machines map .L5K to Notepad.
+    prog_ids = ("acdfile", "l5xfile")
+    roots = (
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\Classes"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Classes"),
+        (winreg.HKEY_CURRENT_USER, r"Software\Classes"),
+    )
+    for hive, root in roots:
+        for prog_id in prog_ids:
+            try:
+                with winreg.OpenKey(hive, rf"{root}\{prog_id}\shell\open\command") as key:
+                    cmd, _ = winreg.QueryValueEx(key, None)
+            except OSError:
+                continue
+            found = _parse_loader_from_command(str(cmd))
+            if found is not None:
+                return found
+    for fb in _LOADER_FALLBACKS:
+        p = Path(fb)
+        if p.is_file():
+            return p
+    raise FileNotFoundError(
+        "RSLogix5000Loader.exe not found. Install Studio 5000 Logix Designer "
+        "or repair the .ACD file association."
+    )
+
+
 @mcp.tool()
 async def copy_project(path: str, output: str = "", force: bool = False) -> str:
     """Copy a ``.ACD`` / ``.L5X`` / ``.L5K`` on disk without opening it in the SDK.
 
     Use this when Studio already has the original project open (exclusive lock):
-    copy to a sibling path, then call other tools against the copy. With no
-    ``output``, writes ``{stem}_mcp{suffix}`` next to the source. Pass
-    ``force=true`` to overwrite an existing destination.
+    copy into ``ProgramCopies`` under the MCP install, then call other tools
+    against the copy. With no ``output``, writes
+    ``ProgramCopies/{stem}_mcp{suffix}``. Pass ``force=true`` to overwrite an
+    existing destination.
     """
     pf = preflight_project_path(path)
     if pf:
@@ -50,7 +112,7 @@ async def copy_project(path: str, output: str = "", force: bool = False) -> str:
     if output and str(output).strip():
         out = _resolve(output)
     else:
-        out = src.with_name(f"{src.stem}_mcp{src.suffix}")
+        out = _program_copies_dir() / f"{src.stem}_mcp{src.suffix}"
 
     pf = preflight_output_path(str(out), _PROJECT_EXTS)
     if pf:
@@ -98,6 +160,57 @@ async def copy_project(path: str, output: str = "", force: bool = False) -> str:
     return await _run(
         "copy_project", _do, path=str(src), output=str(out), force=force
     )
+
+
+@mcp.tool()
+async def launch_designer(path: str, wait: bool = False) -> str:
+    """Open a project in the Studio 5000 Logix Designer **GUI** (not the headless SDK).
+
+    Uses ``RSLogix5000Loader.exe`` (same as double-clicking the file) so the
+    correct Designer major revision is selected for the ACD/L5X/L5K. This is
+    for human review after MCP edits — it does **not** replace ``open_project``
+    for API work.
+
+    Tip: finish SDK tools first (they close the project handle). If Designer
+    reports the file is in use, retry after MCP operations complete. Pass
+    ``wait=true`` only if you want the tool call to block until Designer exits.
+    """
+    pf = preflight_project_path(path)
+    if pf:
+        return pf
+    if sys.platform != "win32":
+        return (
+            "[FAIL] launch_designer\n"
+            "code:    OS_ERROR\n"
+            "class:   NotImplementedError\n"
+            "message: launch_designer is only supported on Windows\n"
+            "hint:    Run the MCP host on a Windows machine with Logix Designer installed.\n"
+            f"context: platform={sys.platform}"
+        )
+
+    async def _do() -> str:
+        p = _resolve(path)
+        loader = _designer_loader_path()
+        # Detached GUI process — do not use shell=True.
+        proc = subprocess.Popen(  # noqa: S603 — fixed loader + validated project path
+            [str(loader), str(p)],
+            close_fds=True,
+        )
+        if wait:
+            rc = proc.wait()
+            return (
+                f"[OK] Designer exited for {p}\n"
+                f"Loader: {loader}\n"
+                f"ExitCode: {rc}"
+            )
+        return (
+            f"[OK] Launched Logix Designer GUI for {p}\n"
+            f"Loader: {loader}\n"
+            f"Pid: {proc.pid}\n"
+            "Note: headless SDK open_project is separate; this is GUI-only."
+        )
+
+    return await _run("launch_designer", _do, path=path, wait=wait)
 
 
 @mcp.tool()
@@ -337,6 +450,7 @@ def _field(obj: object, *names: str) -> object:
 
 __all__ = [
     "copy_project",
+    "launch_designer",
     "open_project",
     "save_project",
     "export_l5x",

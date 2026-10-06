@@ -2,56 +2,58 @@
 
 `studio5000-mcp` is a [FastMCP](https://github.com/jlowin/fastmcp) server that exposes the full Rockwell **Logix Designer SDK 2.0.1** surface to Claude Desktop and Cursor. It lets a model open `.ACD` / `.L5X` projects, list and edit tags, search rungs, build, convert between revisions, manage safety signatures, drive a connected ControlLogix / CompactLogix over EtherNet/IP, and stage SD-card images — all behind safe defaults (preflight validation, structured `[FAIL]` blocks, and a `confirm=true` gate on every controller-mutating call).
 
-## Quickstart (Windows)
+## Quickstart (Windows / PowerShell)
 
-1. Install Python 3.12.x and Studio 5000 Logix Designer.
-2. Run `install.bat` from this repo root.
-3. Start the MCP server with `py -3.12 l5x_acd_server.py`.
+1. Install Python 3.12.x and Studio 5000 Logix Designer (SDK 2.01+ for the Python wheel).
+2. From repo root in **PowerShell**: `.\install.ps1` (or `.\install.bat`, which calls it).
+3. Start the MCP server: `py -3.12 l5x_acd_server.py` (or the full path to `Python312\python.exe` if the `py` launcher is missing).
 4. Add an MCP config entry (example in [`claude_config.example.json`](claude_config.example.json)).
 5. Validate setup with [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) and [`docs/EXAMPLES.md`](docs/EXAMPLES.md).
 
+Agents working in this repo must use PowerShell only — see [`AGENTS.md`](AGENTS.md).
+
 ## Requirements
 
-- **Python 3.12.x** — Rockwell's wheel (`logix_designer_sdk-2.0.1`) is pinned to `>=3.12,<3.13`. Python 3.13 will not install it.
+- **Python 3.12.x** — Rockwell's wheel is pinned to `>=3.12,<3.13`. Python 3.13 will not install it.
 - **Studio 5000 Logix Designer** installed on the same machine (the SDK shells into the installed Logix Services for builds, conversions, online ops, etc.).
-- **The Rockwell wheel.** [`install.bat`](install.bat) installs it from the local Studio 5000 SDK Python folder, then pins the rest of the dependencies from [`requirements.txt`](requirements.txt):
+- **The Rockwell wheel.** [`install.ps1`](install.ps1) installs the newest `logix_designer_sdk-*-py3-none-any.whl` from the local Studio 5000 SDK Python folder, then installs the rest from [`requirements.txt`](requirements.txt):
   - `fastmcp>=3.0`
   - `mcp>=1.0`
   - `lxml>=5.0`
 
 ## Install + run
 
-From this directory, in a Windows shell:
+From this directory, in **PowerShell**:
 
-```bat
-install.bat
+```powershell
+.\install.ps1
 ```
 
-That runs the equivalent of:
-
-```bat
-py -3.12 -m pip install "C:\Users\Public\Documents\Studio 5000\Logix Designer SDK\python\logix_designer_sdk-2.0.1-py3-none-any.whl"
-py -3.12 -m pip install -r requirements.txt
-```
+That finds Python 3.12, installs the SDK wheel from
+`C:\Users\Public\Documents\Studio 5000\Logix Designer SDK\python\`, then runs
+`python -m pip install -r requirements.txt`.
 
 Launch the server over stdio:
 
-```bat
+```powershell
 py -3.12 l5x_acd_server.py
+# fallback if `py` is missing:
+# & "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" l5x_acd_server.py
 ```
 
 `l5x_acd_server.py` is a tiny shim that calls `logix_mcp.server.main()` so existing Claude Desktop / Cursor configs keep working.
 
 ### Claude Desktop / Cursor MCP config
 
-Add a server entry pointing at the absolute path to `l5x_acd_server.py`. Claude Desktop launches MCP servers with `cwd=System32`, so always use absolute paths.
+Add a server entry pointing at the absolute path to `l5x_acd_server.py`. Claude Desktop launches MCP servers with `cwd=System32`, so always use absolute paths. If `py` is not on PATH, set `command` to the full `python.exe` path and drop the `-3.12` arg.
 
 ```json
 {
   "mcpServers": {
     "studio5000-mcp": {
       "command": "py",
-      "args": ["-3.12", "C:\\path\\to\\studio5000-mcp\\l5x_acd_server.py"],
+      "args": ["-3.12", "-u", "C:\\path\\to\\studio5000-mcp\\l5x_acd_server.py"],
+      "cwd": "C:\\path\\to\\studio5000-mcp",
       "env": {
         "LOGIX_MCP_ROOT": "C:\\path\\to\\projects"
       }
@@ -74,12 +76,15 @@ logix_mcp/
                        # preflight_* validators, MCPEventLogger, SDK-gating helpers
   _xml.py              # lxml helpers (_l5x_tree_for_path, _tag_rows, _routine_rows,
                        # _search_rungs, _l5x_quick_open_summary, _fmt_table)
+  _xref.py             # offline L5X cross-reference engine (token + Dest? heuristics)
+  _ladder.py           # Unicode/SVG ladder render from RLL neutral text
   tools/
     __init__.py
-    project_io.py      # open / save / export / read / convert / create_new / get_processor_types
+    project_io.py      # copy_project / launch_designer / open / save / export / convert / create_new
     build.py           # build_project (default | physical | echo) + validate_project alias
     tags.py            # list_tags, get_tag, set_tag, update_tag
-    program.py         # list_routines, search_rungs, get_all_executables (gated)
+    program.py         # list_routines, search_rungs, get_rung, get_rung_diagram, get_all_executables (gated)
+    xref.py            # cross_reference / trace_origin (offline where-used)
     partial.py         # export_component_l5x, import_partial_l5x,
                        # import_with_target_l5x, import_rungs_from_l5x,
                        # create_udt, create_tag, create_program, create_routine,
@@ -134,6 +139,8 @@ Badge legend (plain text — clients render them as labels in tool docs):
 
 | Tool | Description | Online? | Destructive? | SDK-gated? |
 |------|-------------|---------|--------------|------------|
+| `copy_project` | Copy a `.ACD` / `.L5X` / `.L5K` on disk without opening the SDK (lock-safe working copy; default `ProgramCopies/{stem}_mcp{suffix}` inside the MCP install). | no | no | no |
+| `launch_designer` | Open the project in the Logix Designer **GUI** via `RSLogix5000Loader.exe` (human review). Not a headless SDK open. | no | no | no |
 | `open_project` | Open a Logix project. `.L5X` defaults to a fast lxml peek; pass `sdk_open=true` for a full SDK open. `.ACD` always uses the SDK. | no | no | no |
 | `save_project` | Save the project. With no `output` calls `save()`; otherwise `save_as` (toggles `detailed_l5x` for `.L5X`). | no | no | no |
 | `export_l5x` | Export the full project to an `.L5X` via `save_as(detailed_l5x=true)`. | no | no | no |
@@ -164,6 +171,10 @@ Badge legend (plain text — clients render them as labels in tool docs):
 |------|-------------|---------|--------------|------------|
 | `list_routines` | List Programs / Routines / rung counts via a temp detailed L5X export. | no | no | no |
 | `search_rungs` | Case-insensitive search over rung text + comments using a temp L5X. | no | no | no |
+| `get_rung` | Full neutral text for one program/routine/rung number (drill-down after xref or origin trace). | no | no | no |
+| `get_rung_diagram` | Unicode + SVG ladder drawing of one rung, plus a table of tag/bit descriptions for every referenced tag. | no | no | no |
+| `cross_reference` | Offline where-used for a tag/symbol (L5X): definitions, aliases, RLL/ST hits, modules; heuristic Dest? flag. Not Studio `xref.dll`. | no | no | no |
+| `trace_origin` | Offline backward origin trace with Mermaid boxes, JSON boxes/edges, and drill-down via `focus` / `from_box` / `get_rung`. Literal-0 writes are text-only. Not Studio `xref.dll`. Copy a locked ACD first. | no | no | no |
 | `get_all_executables` | List every executable element (programs, routines, AOIs); SDK-gated, needs a newer wheel. | no | no | yes |
 
 ### Partial import / export

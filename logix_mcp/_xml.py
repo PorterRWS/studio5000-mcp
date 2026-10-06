@@ -120,6 +120,30 @@ def _search_rungs(root, needle: str) -> list[str]:
     return hits
 
 
+def _get_rung(root, program: str, routine: str, number: str | int) -> str | None:
+    """Return full text for one rung, or None if it is not found."""
+    prog_l = (program or "").strip().lower()
+    rout_l = (routine or "").strip().lower()
+    num = str(number).strip()
+    if not prog_l or not rout_l or not num:
+        return None
+    for el in root.iter():
+        if _local(el.tag) != "Rung":
+            continue
+        if str(el.get("Number", "")).strip() != num:
+            continue
+        prog, rout = _scope_from_ancestor_chain(el)
+        if prog.lower() != prog_l or rout.lower() != rout_l:
+            continue
+        owner = el
+        while owner is not None and _local(owner.tag) != "Routine":
+            owner = owner.getparent()
+        # Prefer the matching routine name already checked via scope.
+        text = (_rung_text(el) or "").strip()
+        return text or None
+    return None
+
+
 def _fmt_table(rows: list[tuple[str, str, str, str]], headers: tuple[str, ...]) -> str:
     if not rows:
         return "(no tags found in L5X export)"

@@ -23,6 +23,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Working copies created by copy_project
+ProgramCopies/
+
 # Logix / generated artifacts
 *.ACD.BAK
 *.acd.bak
@@ -34,6 +37,7 @@ _tmp_export.L5X
 _test_*.py
 probe_*.py
 tmp_*.py
+_reflect_nupkg/
 PCI0000_TEST_WORK.acd
 PCI0000_TEST_WORK.acd.BAK
 test_project.ACD

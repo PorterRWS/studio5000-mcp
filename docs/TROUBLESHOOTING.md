@@ -4,10 +4,16 @@
 
 ### `ModuleNotFoundError: logix_designer_sdk`
 - Ensure Python 3.12.x is used.
-- Run `install.bat` from repo root.
+- From repo root in PowerShell: `.\install.ps1`.
 
 ### `py -3.12` not found
-- Install Python 3.12 and ensure launcher is available.
+- Install Python 3.12.x.
+- Or call the interpreter directly:
+  `& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" ...`
+- `install.ps1` falls back to that path automatically.
+
+### Agent shell errors like `Missing file specification after redirection operator`
+- That is bash heredoc syntax (`<<'EOF'`) under PowerShell. Use PowerShell here-strings or a temp `.py` file. See [`../AGENTS.md`](../AGENTS.md).
 
 ## SDK/Logix issues
 
